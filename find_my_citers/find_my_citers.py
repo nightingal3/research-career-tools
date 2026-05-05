@@ -36,20 +36,16 @@ def get_citations(paper_id: str) -> list[dict]:
     ]
 
 
-def find_my_citers(author_id: str) -> list[tuple[str, int]]:
-    your_paper_ids = get_author_papers(author_id)
-    citation_counts = defaultdict(int)
-    citation_years = []
-    total_papers = len(your_paper_ids)
-    processed_papers = 0
-
-    for paper in (pbar := tqdm(your_paper_ids, desc="Papers", unit="paper")):
+def process_citations(papers: list[dict], citation_counts: defaultdict, citation_years: list, desc: str = "Papers") -> list[dict]:
+    """Process citations for a list of papers, returning any that failed."""
+    failed = []
+    for paper in (pbar := tqdm(papers, desc=desc, unit="paper")):
         pbar.set_postfix_str(f"fetching: {paper['title'][:40]}")
         try:
             citations = get_citations(paper["paperId"])
         except RetryError:
-            tqdm.write(f"Rate limit exceeded for '{paper['title']}', skipping.")
-            processed_papers += 1
+            tqdm.write(f"Rate limit exceeded for '{paper['title']}', will retry.")
+            failed.append(paper)
             time.sleep(10)
             continue
         for citation in tqdm(
@@ -62,9 +58,23 @@ def find_my_citers(author_id: str) -> list[tuple[str, int]]:
                 citation_counts[author_name] += 1
             if citation["year"] is not None:
                 citation_years.append(citation["year"])
-
-        processed_papers += 1
         time.sleep(1)
+    return failed
+
+
+def find_my_citers(author_id: str) -> list[tuple[str, int]]:
+    your_paper_ids = get_author_papers(author_id)
+    citation_counts = defaultdict(int)
+    citation_years = []
+
+    failed = process_citations(your_paper_ids, citation_counts, citation_years)
+    if failed:
+        tqdm.write(f"\nRetrying {len(failed)} failed paper(s) after a cooldown...")
+        time.sleep(60)
+        still_failed = process_citations(failed, citation_counts, citation_years, desc="Retrying")
+        if still_failed:
+            tqdm.write(f"Warning: {len(still_failed)} paper(s) permanently skipped due to rate limits: "
+                       + ", ".join(p["title"] for p in still_failed))
 
     sorted_citation_counts = sorted(
         citation_counts.items(), key=lambda item: item[1], reverse=True
