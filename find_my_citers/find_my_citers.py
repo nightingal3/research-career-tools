@@ -1,8 +1,10 @@
 import argparse
 from collections import defaultdict, Counter
 import csv
+import time
 import matplotlib.pyplot as plt
 from semanticscholar import SemanticScholar
+from tenacity import RetryError
 from tqdm import tqdm
 
 sch: SemanticScholar | None = None
@@ -43,17 +45,26 @@ def find_my_citers(author_id: str) -> list[tuple[str, int]]:
 
     for paper in (pbar := tqdm(your_paper_ids, desc="Papers", unit="paper")):
         pbar.set_postfix_str(f"fetching: {paper['title'][:40]}")
-        citations = get_citations(paper["paperId"])
+        try:
+            citations = get_citations(paper["paperId"])
+        except RetryError:
+            tqdm.write(f"Rate limit exceeded for '{paper['title']}', skipping.")
+            processed_papers += 1
+            time.sleep(10)
+            continue
         for citation in tqdm(
             citations, desc=paper["title"][:50], unit="citation", leave=False
         ):
             for author in citation["authors"]:
-                author_name = author.get("name") if isinstance(author, dict) else author.name
+                author_name = (
+                    author.get("name") if isinstance(author, dict) else author.name
+                )
                 citation_counts[author_name] += 1
             if citation["year"] is not None:
                 citation_years.append(citation["year"])
 
         processed_papers += 1
+        time.sleep(1)
 
     sorted_citation_counts = sorted(
         citation_counts.items(), key=lambda item: item[1], reverse=True
