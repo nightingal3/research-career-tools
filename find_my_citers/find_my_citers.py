@@ -2,39 +2,35 @@ import argparse
 from collections import defaultdict, Counter
 import csv
 import matplotlib.pyplot as plt
-from requests import Session
-import s2
+from semanticscholar import SemanticScholar
+from tqdm import tqdm
 
-s2_api_key: str | None = None
+sch: SemanticScholar | None = None
 
 
 def get_author_name(author_id: str) -> str:
     """Fetch the name of the author given the author ID."""
-    author_details = s2.api.get_author(authorId=author_id, session=session)
+    author_details = sch.get_author(author_id)
     return author_details.name.replace(" ", "_")
 
 
 def get_author_papers(author_id: str) -> list[dict]:
-    """Fetch papers for a given author ID from Semantic Scholar using PyS2."""
-    author_papers = s2.api.get_author(authorId=author_id, session=session).papers
-    return [{"title": paper.title, "paperId": paper.paperId} for paper in author_papers]
+    """Fetch papers for a given author ID from Semantic Scholar."""
+    author = sch.get_author(author_id)
+    return [{"title": paper.title, "paperId": paper.paperId} for paper in author.papers]
 
 
 def get_citations(paper_id: str) -> list[dict]:
-    """Fetch citations for a given paper ID from Semantic Scholar using PyS2."""
-    paper_details = s2.api.get_paper(paperId=paper_id, session=session)
+    """Fetch citations for a given paper ID from Semantic Scholar."""
+    paper_details = sch.get_paper(paper_id)
     return [
-        {"title": citation.title, "paperId": citation.paperId, "year": citation.year}
+        {
+            "title": citation.title,
+            "paperId": citation.paperId,
+            "year": citation.year,
+            "authors": citation.authors,
+        }
         for citation in paper_details.citations
-    ]
-
-
-def get_paper_authors(paper_id: str) -> list[dict]:
-    """Fetch authors for a given paper ID from Semantic Scholar using PyS2."""
-    paper_details = s2.api.get_paper(paperId=paper_id, session=session)
-    return [
-        {"name": author.name, "authorId": author.authorId}
-        for author in paper_details.authors
     ]
 
 
@@ -45,20 +41,19 @@ def find_my_citers(author_id: str) -> list[tuple[str, int]]:
     total_papers = len(your_paper_ids)
     processed_papers = 0
 
-    for paper in your_paper_ids:
+    for paper in (pbar := tqdm(your_paper_ids, desc="Papers", unit="paper")):
+        pbar.set_postfix_str(f"fetching: {paper['title'][:40]}")
         citations = get_citations(paper["paperId"])
-        print(f"Processing paper {paper['title']}")
-        for citation in citations:
-            print(f"Processing citation {citation['title']}")
-            if "paperId" in citation:
-                authors = get_paper_authors(citation["paperId"])
-                for author in authors:
-                    author_name = author.get("name")
-                    citation_counts[author_name] += 1
+        for citation in tqdm(
+            citations, desc=paper["title"][:50], unit="citation", leave=False
+        ):
+            for author in citation["authors"]:
+                author_name = author.get("name") if isinstance(author, dict) else author.name
+                citation_counts[author_name] += 1
+            if citation["year"] is not None:
                 citation_years.append(citation["year"])
 
         processed_papers += 1
-        print(f"Processed paper {processed_papers} of {total_papers}")
 
     sorted_citation_counts = sorted(
         citation_counts.items(), key=lambda item: item[1], reverse=True
@@ -117,10 +112,7 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    s2_api_key = args.s2_api_key
-    session = Session()
-    if s2_api_key:
-        session.headers.update({"x-api-key": s2_api_key})
+    sch = SemanticScholar(api_key=args.s2_api_key)
 
     if args.author_id is None:
         author_id = input("Enter the author ID: ")
